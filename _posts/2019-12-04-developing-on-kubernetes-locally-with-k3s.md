@@ -13,8 +13,6 @@ This talk will demo a basic "inner development loop" using Docker builds and a l
 
 ## What I've been looking for
 
-
-
 1. A sample app, "inner loop" example
    -
 2. `kubectl logs myapp-` _press tab_
@@ -61,7 +59,7 @@ In the face of a few such incompatibilities we didn't really troubleshoot, we ju
 
 ```bash
 # more about multipass later
-multipass launch -n k3s
+multipass launch -n k3s -c 2
 # then
 multipass shell k3s
 # ... continue inside the VM
