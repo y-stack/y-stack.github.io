@@ -71,7 +71,8 @@ k3s kubectl get pods --all-namespaces
 # back on the host again ...
 
 # We need a DNS name because the machine IP will change per launch
-echo "$(multipass info k3s | grep "IPv4" | awk -F' ' '{print $2}')  k3s.local" | sudo tee -a /etc/hosts
+VM_IP=$(multipass info k3s | grep 'IPv4' | awk -F' ' '{print $2}')
+echo "$VM_IP  k3s.local" | sudo tee -a /etc/hosts
 
 export KUBECONFIG=$(pwd)/k3s-demo-kubeconfig.yaml
 
@@ -89,26 +90,21 @@ With the risk of coming across as a fanboy I have to say that k3s induced a kind
 
 ## What is k3s
 
+K3s doesn't come with provisioning for your OS.
+
 What k3s targets that we don't actually care about is to be persistent.
 Server and nodes survive machine restarts and can be upgraded.
 
 The [k3s docs](https://k3s.io/) has a nice graphic.
-
-## What k3s isn't
-
-K3s doesn't come with provisioning for your OS,
-unless your os is Linux. For linux there's an [install.sh]() in the main repo.
-
-For Max you'll have to host
 
 ## How to select a VM on Mac
 
 Here I hope that the audience has more ideas than we've come up with.
 
 From our experiences with Minikube we've actually ruled out VirtualBox.
-Switching to [Minikube's hyperkit driver]() reduces CPU load significantly.
+Switching to [Minikube's hyperkit driver](https://minikube.sigs.k8s.io/docs/reference/drivers/hyperkit/) reduces CPU load significantly.
 Thus for k3s we found ourselves looking for linux running on Hyperkit,
-and the (only?) option we found was [Multipass]().
+and the (only?) option we found was [Multipass](https://github.com/CanonicalLtd/multipass/).
 
 ### Our experiences with Multipass
 
@@ -118,8 +114,8 @@ Also the CLI has an annoying gotcha where many commands when invoked without a m
 
 ## What about k3os, k3d or vanilla docker images
 
-We have [an issue]() right now that triggered some temptation to look into dedicated k3s hosting,
-namely [k3os]() and [k3d]().
+We have [an issue](https://github.com/y-stack/ystack/pull/17) right now that triggered some temptation to look into dedicated k3s hosting,
+namely [k3os](https://github.com/rancher/k3os/) and [k3d](https://github.com/rancher/k3d/).
 
 As for k3os we're yet to find a simple way to run it on Mac.
 
@@ -127,7 +123,7 @@ As for k3d, do we really want to add a layer of containerization around k3s? Als
 
 ### k3s already runs in docker
 
-There's a [docker-compose.test.yml]() in the ystack repo that brings up a fully functional k3s
+There's a [docker-compose.test.yml](https://github.com/y-stack/ystack/blob/master/docker-compose.test.yml) in the ystack repo that brings up a fully functional k3s
 using the project's official docker image.
 A flaw we found, and never got to troubleshooting, is that `kubectl logs` doesn't work.
 There are two reasons we're sticking with Multipass for the time being:
@@ -159,6 +155,12 @@ And, locally on my machine, `kubectl` + Docker + [Skaffold]().
 ## First of all, the demo app
 
 
+```bash
+for f in helloworld.go go.mod Dockerfile; do curl -fL -o sample-app/$f --create-dirs https://github.com/knative/docs/raw/master/docs/serving/samples/hello-world/helloworld-go/$f; done
+
+docker build -t helloworld sample-app
+```
+
 Ok so now we can do `docker run`, but what's the name of this meetup again?
 
 ## Provisioning
@@ -177,10 +179,8 @@ With a local cluster it appears quite insane to first push your images to a remo
 
 There seems to be a small but persistent fraction of communities like Minikube, Knative and k3s that stubbornly files issues arguing for "private" registry support.
 
-K3s recently introduced [custom Containerd registry config](https://rancher.com/docs/k3s/latest/en/installation/airgap/#create-registry-yaml)
-which I'll use in combination with a [deployment]() running Docker's open source registry (it's lightweight).
+K3s recently introduced [custom Containerd registry config](https://rancher.com/docs/k3s/latest/en/installation/airgap/#create-registry-yaml) which is really neat if you want to set up "mirrors", i.e. re-map hostnames and select http or https.
 
-https://github.com/y-stack/ystack/tree/master/registry/generic
 Let's borrow Yolean's registry setup but use ephemeral storage:
 
 ```
@@ -205,13 +205,71 @@ Let's open a port on the VM for registry access:
 ```bash
 kubectl patch service builds-registry --patch '{"spec":{"type":"NodePort","ports":[{"port":80,"nodePort":30500}]}}'
 curl -I http://k3s.local:30500/v2/
-
 ```
+
+If that curl worked we can probably build & push: `docker build -t k3s.local:30500/sample ./sample-app && docker push k3s.local:30500/sample`
 
 ### How does k8s pull them?
 
-Tricky, because the container runtime can't resolve k8s service names.
-It can however connect to k8s service IPs.
+Nodes can, in all clusters I've tested, connect to Kubernetes Services' IPs.
+They won't however resolve .cluster.local DNS names.
+For this demo I'm instead exposing a NodePort, as seen above.
+
+```bash
+cat << EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample
+  labels: &labels
+    app: sample
+spec:
+  replicas: 3
+  selector:
+    matchLabels: *labels
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      containers:
+      - name: hello
+        image: 127.0.0.1:30500/sample:latest
+        ports:
+        - containerPort: 8080
+EOF
+```
+
+## K3s ingress
+
+```bash
+cat << EOF | kubectl apply -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample
+spec:
+  selector:
+    app: sample
+  ports:
+    - protocol: TCP
+      port: 8080
+EOF
+cat << EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: sample
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /
+        backend:
+          serviceName: sample
+          servicePort: 8080
+EOF
+curl http://k3s.local/
+```
 
 ## The development loop
 
@@ -220,16 +278,11 @@ that distinguishes between "inner" and "outer" loop.
 
 Let's try an inner loop with docker + kubectl ...
 
-My yamls in ./k8s
-
 ```
-docker build -t k3s.local:30500/sample . && docker push k3s.local:30500/sample
+docker build -t k3s.local:30500/sample ./sample-app && docker push k3s.local:30500/sample
 kubectl rollout restart deploy sample
 curl http://k3s.local/
 ```
-
-## Tooling for this, anyone
-
 
 ## K3s
 
@@ -240,3 +293,8 @@ Create an ingress.
 What happens when I restart the cluster, not the VM?
 
 Look at resource utilization.
+
+# Things I'd like to explore
+
+ * How can we run a k3os [iso](https://github.com/rancher/k3os/releases) on Mac with minimal overhead?
+ * How to get `kubectl logs` to work with the docker-compose based provisioning?
