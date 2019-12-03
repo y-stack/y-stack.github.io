@@ -6,10 +6,22 @@ date: 2019-09-23
 categories:
 ---
 
-Once you got used to near-instant tab completions of pod names with kubectl,
-you'd rather paintstakingly set up kubernetes on your laptop than develop on a managed remote cluster.
+Once you get used to `kubectl` tab completions of pod names that are almost as fast as local paths,
+you'll want to run kubernetes on your laptop rathern than develop on a managed remote cluster.
 
-This talk will demo a quite bearable "inner development loop" using Skaffold and a local image registry running on k3s.
+This talk will demo a basic "inner development loop" using Docker builds and a local image registry running on k3s.
+
+## What I've been looking for
+
+
+
+1. A sample app, "inner loop" example
+   -
+2. `kubectl logs myapp-` _press tab_
+3. Minimal fan noise
+
+Critera 3 is not only the reason to look for a lightweight Kubernetes setup,
+it's also the reason I'm running Mac. I'd prefer to run Ubuntu but I don't have time to find the right hardware.
 
 ## Our evaluation criterias
 
@@ -47,6 +59,26 @@ In the face of a few such incompatibilities we didn't really troubleshoot, we ju
 
 ### k3s
 
+```bash
+# more about multipass later
+multipass launch -n k3s
+# then
+multipass shell k3s
+# ... continue inside the VM
+sudo -s
+# and run the installer from https://k3s.io/
+journalctl -ef -u k3s
+k3s kubectl get pods --all-namespaces
+# back on the host again
+export KUBECONFIG=$(pwd)/k3s-demo-kubeconfig.yaml
+# https://medium.com/@mattiaperi/kubernetes-cluster-with-k3s-and-multipass-7532361affa3
+K3S_NODEIP_MASTER="$(multipass info k3s | grep "IPv4" | awk -F' ' '{print $2}')"
+multipass exec k3s -- sudo cat /etc/rancher/k3s/k3s.yaml \
+  | sed "s|127.0.0.1|$K3S_NODEIP_MASTER|" \
+  > $KUBECONFIG
+kubectl get pods --all-namespaces
+```
+
 Our first impression of k3s was that [install.sh](https://github.com/rancher/k3s/blob/master/install.sh) wasn't scary and that
 all workloads we have in production today just worked as-is.
 Minikube never disappointed in that regard, but my experience with Minikube is that you've always needed to tweak things
@@ -58,7 +90,7 @@ With the risk of coming across as a fanboy I have to say that k3s induced a kind
 What k3s targets that we don't actually care about is to be persistent.
 Server and nodes survive machine restarts and can be upgraded.
 
-k3s docs has a nice graphic ...
+The [k3s docs](https://k3s.io/) has a nice graphic.
 
 ## What k3s isn't
 
@@ -146,6 +178,15 @@ There seems to be a small but persistent fraction of communities like Minikube, 
 K3s recently introduced [custom Containerd registry config](https://rancher.com/docs/k3s/latest/en/installation/airgap/#create-registry-yaml)
 which I'll use in combination with a [deployment]() running Docker's open source registry (it's lightweight).
 
+https://github.com/y-stack/ystack/tree/master/registry/generic
+Let's borrow Yolean's registry setup but use ephemeral storage:
+
+```
+kubectl apply -k github.com/y-stack/ystack/registry/generic?ref=e3d0a7e
+kubectl patch deployment registry --patch '{"spec":{"replicas":1,"template":{"spec":{"containers":[{"name": "docker-v2","env":[{"name":"REGISTRY_STORAGE","value":"inmemory"}]}]}}}}'
+kubectl get pods
+```
+
 ### What about using the cluster's docker daemon
 
 Minikube's support for DOCKER_HOST works really well,
@@ -155,6 +196,12 @@ You actually have to fiddle with `imagePullPolicy` in most of your yaml, wich go
 ### How do we push builds to the registry?
 
 Let's just port-forward.
+
+```bash
+kubectl port-forward svc/builds-registry 5000:80
+
+curl -I http://localhost:5000/v2/
+```
 
 ### How does k8s pull them?
 
