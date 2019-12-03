@@ -69,12 +69,16 @@ sudo -s
 # and run the installer from https://k3s.io/
 journalctl -ef -u k3s
 k3s kubectl get pods --all-namespaces
-# back on the host again
+
+# back on the host again ...
+
+# We need a DNS name because the machine IP will change per launch
+echo "$(multipass info k3s | grep "IPv4" | awk -F' ' '{print $2}')  k3s.local" | sudo tee -a /etc/hosts
+
 export KUBECONFIG=$(pwd)/k3s-demo-kubeconfig.yaml
-# https://medium.com/@mattiaperi/kubernetes-cluster-with-k3s-and-multipass-7532361affa3
-K3S_NODEIP_MASTER="$(multipass info k3s | grep "IPv4" | awk -F' ' '{print $2}')"
+
 multipass exec k3s -- sudo cat /etc/rancher/k3s/k3s.yaml \
-  | sed "s|127.0.0.1|$K3S_NODEIP_MASTER|" \
+  | sed "s|127.0.0.1|k3s.local|" \
   > $KUBECONFIG
 kubectl get pods --all-namespaces
 ```
@@ -183,7 +187,7 @@ Let's borrow Yolean's registry setup but use ephemeral storage:
 
 ```
 kubectl apply -k github.com/y-stack/ystack/registry/generic?ref=e3d0a7e
-kubectl patch deployment registry --patch '{"spec":{"replicas":1,"template":{"spec":{"containers":[{"name": "docker-v2","env":[{"name":"REGISTRY_STORAGE","value":"inmemory"}]}]}}}}'
+kubectl patch deployment registry --patch '{"spec":{"replicas":1,"template":{"spec":{"containers":[{"name": "docker-v2","env":[{"name":"REGISTRY_STORAGE","value":"filesystem"}]}]}}}}'
 kubectl get pods
 ```
 
@@ -195,12 +199,15 @@ You actually have to fiddle with `imagePullPolicy` in most of your yaml, wich go
 
 ### How do we push builds to the registry?
 
-Let's just port-forward.
+Note that Docker enforces https for all non-localhost addresses,
+so you need to add an [insecure registry](https://docs.docker.com/registry/insecure/). In Docker for Mac you can edit `docker.json` from Preferences > Docker Engine.
+
+Let's open a port on the VM for registry access:
 
 ```bash
-kubectl port-forward svc/builds-registry 5000:80
+kubectl patch service builds-registry --patch '{"spec":{"type":"NodePort","ports":[{"port":80,"nodePort":30500}]}}'
+curl -I http://k3s.local:30500/v2/
 
-curl -I http://localhost:5000/v2/
 ```
 
 ### How does k8s pull them?
@@ -217,7 +224,11 @@ Let's try an inner loop with docker + kubectl ...
 
 My yamls in ./k8s
 
-Tag my image as :latest
+```
+docker build -t k3s.local:30500/sample . && docker push k3s.local:30500/sample
+kubectl rollout restart deploy sample
+curl http://k3s.local/
+```
 
 ## Tooling for this, anyone
 
