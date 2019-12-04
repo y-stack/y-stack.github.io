@@ -2,7 +2,7 @@
 layout: post
 title: "Developing on Kubernetes locally with k3s"
 author: Staffan Olsson
-date: 2019-09-23
+date: 2019-12-04
 categories:
 ---
 
