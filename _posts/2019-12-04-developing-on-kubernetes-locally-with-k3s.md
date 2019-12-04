@@ -6,15 +6,14 @@ date: 2019-09-23
 categories:
 ---
 
-Once you get used to `kubectl` tab completions of pod names that are almost as fast as local paths,
-you'll want to run kubernetes on your laptop rathern than develop on a managed remote cluster.
+Once you get used to `kubectl` tab completions of pod names, as instant almost as local paths,
+you'll want to run kubernetes on your laptop rather than develop on a managed remote cluster.
 
-This talk will demo a basic "inner development loop" using Docker builds and a local image registry running on k3s.
+This talk will demo a basic "inner development loop" using Docker builds and a local image registry running on k3s. With a local cluster you'll want a local docker registry, to speed up the repeated push and pull that a development loop requires.
 
 ## What I've been looking for
 
-1. A sample app, "inner loop" example
-   -
+1. Develop multiple services together in a production-like cluster, with fast feedback.
 2. `kubectl logs myapp-` _press tab_
 3. Minimal fan noise
 
@@ -22,6 +21,8 @@ Critera 3 is not only the reason to look for a lightweight Kubernetes setup,
 it's also the reason I'm running Mac. I'd prefer to run Ubuntu but I don't have time to find the right hardware.
 
 ## Our evaluation criterias
+
+At Yolean we started looking for:
 
 1. Compatibility with our production workloads
 2. Compatibility with our kubectl workflows (top, logs)
@@ -36,7 +37,7 @@ it's also the reason I'm running Mac. I'd prefer to run Ubuntu but I don't have 
 
 We evaluated [Minikube](https://minikube.sigs.k8s.io/),
 [microk8s](https://microk8s.io/) and [k3s](https://k3s.io/), in that order.
-We also briefly tried [kind](), but found it too geared towards CI.
+We also briefly tried [kind](https://github.com/kubernetes-sigs/kind), but found it too geared towards CI.
 
 ### minikube
 
@@ -48,6 +49,7 @@ but it also becomes clear that the Minikube community struggles with quite a bit
 
 ### containerd vs. dockerd
 
+We've seen GKE adopting Containerd, and while they aren't actually phasing out Docker it makes sense to go for the option that is only a container runtime.
 
 ### microk3s
 
@@ -56,6 +58,11 @@ for example our very basic [MariaDB](https://github.com/Yolean/kubernetes-mysql-
 In the face of a few such incompatibilities we didn't really troubleshoot, we just looked around again.
 
 ### k3s
+
+Our first impression of k3s was that [install.sh](https://github.com/rancher/k3s/blob/master/install.sh) wasn't scary and that
+all workloads we have in production today just worked as-is.
+Minikube never disappointed in that regard, but my experience with Minikube is that you've always needed to tweak things
+(for example [Knative's](https://knative.dev/docs/install/knative-with-minikube/#creating-a-kubernetes-cluster) setup is like a "flavor" of Minkube).
 
 ```bash
 # more about multipass later
@@ -82,20 +89,14 @@ multipass exec k3s -- sudo cat /etc/rancher/k3s/k3s.yaml \
 kubectl get pods --all-namespaces
 ```
 
-Our first impression of k3s was that [install.sh](https://github.com/rancher/k3s/blob/master/install.sh) wasn't scary and that
-all workloads we have in production today just worked as-is.
-Minikube never disappointed in that regard, but my experience with Minikube is that you've always needed to tweak things
-(for example [Knative's](https://knative.dev/docs/install/knative-with-minikube/#creating-a-kubernetes-cluster) setup is like a "flavor" of Minkube).
-With the risk of coming across as a fanboy I have to say that k3s induced a kind of never-look-back feeling.
+The [k3s docs](https://k3s.io/) has a nice graphic on what k3s consists of. Note that it's actually only a binary.
 
-## What is k3s
+## What does K3s run on?
 
 K3s doesn't come with provisioning for your OS.
 
-What k3s targets that we don't actually care about is to be persistent.
-Server and nodes survive machine restarts and can be upgraded.
-
-The [k3s docs](https://k3s.io/) has a nice graphic.
+It's designed to be persistent.
+Server and nodes survive machine restarts and can be upgraded. It makes sense that such a tool doesn't focus on automatic provisioning for development.
 
 ## How to select a VM on Mac
 
@@ -104,7 +105,7 @@ Here I hope that the audience has more ideas than we've come up with.
 From our experiences with Minikube we've actually ruled out VirtualBox.
 Switching to [Minikube's hyperkit driver](https://minikube.sigs.k8s.io/docs/reference/drivers/hyperkit/) reduces CPU load significantly.
 Thus for k3s we found ourselves looking for linux running on Hyperkit,
-and the (only?) option we found was [Multipass](https://github.com/CanonicalLtd/multipass/).
+and the option we found was [Multipass](https://github.com/CanonicalLtd/multipass/).
 
 ### Our experiences with Multipass
 
@@ -123,37 +124,31 @@ As for k3d, do we really want to add a layer of containerization around k3s? Als
 
 ### k3s already runs in docker
 
-There's a [docker-compose.test.yml](https://github.com/y-stack/ystack/blob/master/docker-compose.test.yml) in the ystack repo that brings up a fully functional k3s
-using the project's official docker image.
-A flaw we found, and never got to troubleshooting, is that `kubectl logs` doesn't work.
-There are two reasons we're sticking with Multipass for the time being:
+There's an example [docker-compose.yml](https://github.com/rancher/k3s/blob/master/docker-compose.yml) in the k3s repo.
+
+```bash
+mkdir k3s-compose && cd k3s-compose
+curl -fLO https://github.com/rancher/k3s/raw/master/docker-compose.yml
+docker-compose up -d && docker-compose logs -f
+KUBECONFIG=$(pwd)/kubeconfig.yaml kubectl cluster-info
+KUBECONFIG=$(pwd)/kubeconfig.yaml kubectl get pods --all-namespaces
+KUBECONFIG=$(pwd)/kubeconfig.yaml kubectl -n kube-system logs -l k8s-app=metrics-server
+# You'll probably see an error "failed to find Session for client" instead of logs
+```
+
+We never got around to troubleshooting the in-docker issue with `kubectl logs`.
+We did however set up a selfcheck for our dev stack using docker-compose.
+The interesting parts is that we can [apply local resources and run checks](https://github.com/y-stack/ystack/blob/1b34d9a398d91ac433fe2d10a9bf4e4fcca97b78/docker-compose.test.yml#L55) in a [https://github.com/y-stack/ystack/blob/master/test.sh](test run)
+that spins up and tears down within 30 seconds locally.
+
+There are two reasons we're sticking with Multipass in our dev environment for the time being:
 
  - When you delete a VM it's really deleted. Containers, networks, volumes etc. in Docker are not that simple to wipe out.
  - We found CPU load to be higher than with multipass for the same provisioning steps (which might however have been because it was faster).
 
-Given how well k3s performs in docker we're quite tempted to use it for CI, as ephemeral cluster.
+## Let's return to the development loop
 
-## What works out of the box
-
- - Automatic volume provisioning (with a default storage class)
- - Ingress
-   - With the Multipass VM, got to be machine-dependent
- - `kubectl top`
- - `kubectl logs` (not with the docker-compose setup)
-
-So finally ....
-
-# k3s demo time
-
-I'll try to run a subset of our [development stack]() consisting of:
-
- * k3s
- * a docker registry running in k3s
-
-And, locally on my machine, `kubectl` + Docker + [Skaffold]().
-
-## First of all, the demo app
-
+First we need a demo app. I've selected one that requires a build step (file sync is a different topic) but with a small runtime image.
 
 ```bash
 for f in helloworld.go go.mod Dockerfile; do curl -fL -o sample-app/$f --create-dirs https://github.com/knative/docs/raw/master/docs/serving/samples/hello-world/helloworld-go/$f; done
@@ -162,14 +157,6 @@ docker build -t helloworld sample-app
 ```
 
 Ok so now we can do `docker run`, but what's the name of this meetup again?
-
-## Provisioning
-
-Run a linux VM.
-
-Run k3s install.
-
-If you're ok with someone else's automation for this, feel free to look at our [provision](https://github.com/y-stack/ystack/blob/master/bin/y-cluster-provision-k3s-multipass) script.
 
 ## Adding a docker registry
 
@@ -183,7 +170,7 @@ K3s recently introduced [custom Containerd registry config](https://rancher.com/
 
 Let's borrow Yolean's registry setup but use ephemeral storage:
 
-```
+```bash
 kubectl apply -k github.com/y-stack/ystack/registry/generic?ref=e3d0a7e
 kubectl patch deployment registry --patch '{"spec":{"replicas":1,"template":{"spec":{"containers":[{"name": "docker-v2","env":[{"name":"REGISTRY_STORAGE","value":"filesystem"}]}]}}}}'
 kubectl get pods
@@ -271,30 +258,34 @@ EOF
 curl http://k3s.local/
 ```
 
-## The development loop
+## How fast is the development loop now?
 
 I hadn't heard the term "development loop" until [this podcast episode](https://kubernetespodcast.com/episode/064-cloud-code/)
 that distinguishes between "inner" and "outer" loop.
 
 Let's try an inner loop with docker + kubectl ...
 
-```
+```bash
 docker build -t k3s.local:30500/sample ./sample-app && docker push k3s.local:30500/sample
 kubectl rollout restart deploy sample
 curl http://k3s.local/
 ```
 
-## K3s
+I'm really uninpressed by the response time for the eventual `curl`, and if we have time during the talk we could try to investigate.
 
-Provision a volume.
+## K3s recap
 
-Create an ingress.
+ - Automatic volume provisioning (with a default storage class)
+ - Ingress
+   - With the Multipass VM, got to be machine-dependent
+ - `kubectl top` (you can't take that for granted with any cluster)
+ - `kubectl logs` (not with the docker-compose setup)
+ - You can restart the server
+ - You can restart the VM
+ - Quite light on resoruces: I still don't hear any fan noise :)
 
-What happens when I restart the cluster, not the VM?
-
-Look at resource utilization.
-
-# Things I'd like to explore
+## Things I'd like to explore
 
  * How can we run a k3os [iso](https://github.com/rancher/k3os/releases) on Mac with minimal overhead?
  * How to get `kubectl logs` to work with the docker-compose based provisioning?
+ *
