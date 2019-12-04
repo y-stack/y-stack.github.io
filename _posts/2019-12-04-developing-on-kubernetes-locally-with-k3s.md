@@ -159,7 +159,7 @@ for f in helloworld.go go.mod Dockerfile; do curl -fL -o sample-app/$f --create-
 docker build -t helloworld sample-app
 ```
 
-Ok so now we can do `docker run`, but what's the name of this meetup again?
+Ok so now we can do `docker run --rm -p 8080:8080 helloworld` and `curl localhost:8080`, but what's the name of this meetup again?
 
 ## Adding a docker registry
 
@@ -269,6 +269,7 @@ that distinguishes between "inner" and "outer" loop.
 Let's try an inner loop with docker + kubectl ...
 
 ```bash
+# After editing sample-app/helloworld.go
 docker build -t k3s.local:30500/sample ./sample-app && docker push k3s.local:30500/sample
 kubectl rollout restart deploy sample
 curl http://k3s.local/
@@ -279,6 +280,7 @@ I'm really uninpressed by the response time for the eventual `curl`, and if we h
 ## K3s recap
 
  - Automatic volume provisioning (with a default storage class)
+   - Try for example `kubectl apply -k github.com/y-stack/ystack/minio/standalone,defaultsecret/?ref=401c330` and watch for "create-pvc" pods
  - Ingress
    - With the Multipass VM, got to be machine-dependent
  - `kubectl top` (you can't take that for granted with any cluster)
@@ -291,4 +293,4 @@ I'm really uninpressed by the response time for the eventual `curl`, and if we h
 
  * How can we run a k3os [iso](https://github.com/rancher/k3os/releases) on Mac with minimal overhead?
  * How to get `kubectl logs` to work with the docker-compose based provisioning?
- *
+ * Are there faster local registry setups? Image push takes quite a bit of time now.
