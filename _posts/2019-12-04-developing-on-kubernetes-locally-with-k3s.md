@@ -72,6 +72,9 @@ multipass shell k3s
 # ... continue inside the VM
 sudo -s
 # and run the installer from https://k3s.io/
+# with workaround for https://github.com/y-stack/ystack/pull/17
+curl -sfL https://get.k3s.io | K3S_CLUSTER_SECRET=notrandom sh -s -
+# check the result
 journalctl -ef -u k3s
 k3s kubectl get pods --all-namespaces
 
